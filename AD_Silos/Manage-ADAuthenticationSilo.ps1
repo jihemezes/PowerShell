@@ -64,6 +64,14 @@
        compte (acces accorde / silo assigne) ; bascule Audit <-> Enforce (refusee s'il existe
        des comptes assignes sans droit d'acces) ; retrait de comptes ; reparation des
        incoherences ; suppression propre d'un silo.
+    8. Journaux DC : collecte, sur tous les controleurs de domaine (ou une selection), des
+       evenements du journal AuthenticationPolicyFailures-DomainController (et en option
+       ProtectedUserSuccesses-DomainController) filtres sur le silo choisi (nom du silo ou
+       comptes membres). Verifie l'etat des journaux (etat effectif, registre, GPO de SYSVOL
+       qui les configurent), les active ou les desactive (environnements de test), classe les
+       evenements AUDIT (echouerait en Enforce) / ENFORCE (bloque) / SUCCES, affiche les comptes
+       et appareils concernes, un verdict "pret pour Enforce", et exporte en CSV. Le verdict
+       est rappele lors de la bascule Audit -> Enforce (onglet 7).
     Ordre d'application : politique, silo, puis pour chaque compte (ordinateurs, services,
     utilisateurs) droit d'acces PUIS assignation. Un journal est affiche en bas de fenetre.
 
@@ -93,9 +101,13 @@
       - La mise a jour d'un silo existant ajoute des comptes mais ne retire pas ceux absents
         de la liste (utiliser l'onglet 7).
       - La suppression d'un silo conserve sa politique d'authentification.
-      - Les GPO Kerberos (revendications / blindage), l'etat reel des clients et les
-        evenements d'audit (journal AuthenticationPolicyFailures-DomainController) ne sont
-        pas verifies automatiquement : un simple rappel est affiche.
+      - Les GPO Kerberos (revendications / blindage) et l'etat reel des clients ne sont pas
+        verifies automatiquement : un simple rappel est affiche.
+      - Onglet 8 : la lecture distante des journaux utilise le RPC Event Log (pare-feu
+        "Gestion a distance des journaux d'evenements" ouvert sur les DC) et necessite des
+        droits de lecture (Event Log Readers ou administrateur) ; l'activation des journaux
+        exige des droits d'administration sur les DC. Seuls les evenements encore presents
+        dans les journaux (taille limitee) sont analyses.
       - Le developpement des groupes et la recherche sont limites aux objets lisibles par
         le compte qui execute l'outil.
 
@@ -418,7 +430,49 @@ $bDel = New-Button 'Supprimer le silo' 700 7 140
 $pnlS.Controls.AddRange(@($bRef, $bTog, $bRem, $bFix, $bDel))
 $tpSilos.Controls.Add($split); $tpSilos.Controls.Add($pnlS); $split.BringToFront()
 
-$tabs.TabPages.AddRange(@($tpCfg, $tUsers.Page, $tComps.Page, $tSvc.Page, $tpCheck, $tpPrev, $tpSilos))
+# ---- Onglet Journaux des DC
+$tpLogs = New-Object System.Windows.Forms.TabPage; $tpLogs.Text = '8. Journaux DC'
+$pnlL = New-Object System.Windows.Forms.Panel; $pnlL.Dock = 'Top'; $pnlL.Height = 78
+$pnlL.Controls.Add((New-Label 'Silo :' 10 8 40))
+$cbLSilo = New-Object System.Windows.Forms.ComboBox
+$cbLSilo.DropDownStyle = 'DropDownList'; $cbLSilo.Location = (P 52 8); $cbLSilo.Size = (Z 230 24)
+$pnlL.Controls.Add((New-Label 'Periode (heures) :' 295 8 110))
+$numLH = New-Object System.Windows.Forms.NumericUpDown
+$numLH.Location = (P 408 8); $numLH.Size = (Z 70 24); $numLH.Minimum = 1; $numLH.Maximum = 2160; $numLH.Value = 24
+$pnlL.Controls.Add((New-Label 'Max evt / DC :' 490 8 90))
+$numLMax = New-Object System.Windows.Forms.NumericUpDown
+$numLMax.Location = (P 582 8); $numLMax.Size = (Z 80 24); $numLMax.Minimum = 50; $numLMax.Maximum = 50000; $numLMax.Value = 5000
+$chkLSucc = New-Object System.Windows.Forms.CheckBox
+$chkLSucc.Text = 'Inclure les succes (TGT emis)'; $chkLSucc.Location = (P 675 8); $chkLSucc.Size = (Z 200 24)
+$chkLAll = New-Object System.Windows.Forms.CheckBox
+$chkLAll.Text = 'Sans filtre silo'; $chkLAll.Location = (P 880 8); $chkLAll.Size = (Z 150 24)
+$bLLoad = New-Button 'Charger silos et DC' 10 42 150
+$bLState = New-Button 'Etat des journaux' 170 42 140
+$bLEnable = New-Button 'Activer les journaux' 320 42 150
+$bLRun = New-Button 'Collecter et analyser' 480 42 170
+$bLRun.BackColor = [System.Drawing.Color]::FromArgb(220, 235, 250)
+$bLCsv = New-Button 'Exporter CSV...' 660 42 130
+$bLDisable = New-Button 'Desactiver les journaux' 800 42 170
+$pnlL.Controls.AddRange(@($cbLSilo, $numLH, $numLMax, $chkLSucc, $chkLAll, $bLLoad, $bLState, $bLEnable, $bLRun, $bLCsv, $bLDisable))
+
+$clbDC = New-Object System.Windows.Forms.CheckedListBox
+$clbDC.Dock = 'Left'; $clbDC.Width = 220; $clbDC.CheckOnClick = $true
+$lblLSum = New-Object System.Windows.Forms.Label
+$lblLSum.Dock = 'Bottom'; $lblLSum.Height = 60; $lblLSum.Padding = New-Object System.Windows.Forms.Padding(6)
+$lblLSum.Font = New-Object System.Drawing.Font('Segoe UI', 9, [System.Drawing.FontStyle]::Bold)
+$lblLSum.Text = "Selectionnez un silo et les DC, puis 'Collecter et analyser'. Les journaux sont desactives par defaut : utilisez 'Etat des journaux' / 'Activer les journaux'."
+$splitL = New-Object System.Windows.Forms.SplitContainer
+$splitL.Dock = 'Fill'; $splitL.Orientation = 'Horizontal'; $splitL.SplitterDistance = 260
+$lvL = New-ListView; $lvL.Dock = 'Fill'; $lvL.MultiSelect = $false
+foreach ($c in @(@('DC', 130), @('Date', 130), @('ID', 45), @('Type', 75), @('Compte', 170), @('Appareil / Service', 170), @('Silo / Politique', 200), @('Signification', 450))) { [void]$lvL.Columns.Add($c[0], $c[1]) }
+$txtLDet = New-Object System.Windows.Forms.TextBox
+$txtLDet.Multiline = $true; $txtLDet.ReadOnly = $true; $txtLDet.ScrollBars = 'Both'; $txtLDet.WordWrap = $false
+$txtLDet.Font = New-Object System.Drawing.Font('Consolas', 9); $txtLDet.Dock = 'Fill'
+$splitL.Panel1.Controls.Add($lvL); $splitL.Panel2.Controls.Add($txtLDet)
+$tpLogs.Controls.Add($splitL); $tpLogs.Controls.Add($clbDC); $tpLogs.Controls.Add($lblLSum); $tpLogs.Controls.Add($pnlL)
+$splitL.BringToFront()
+
+$tabs.TabPages.AddRange(@($tpCfg, $tUsers.Page, $tComps.Page, $tSvc.Page, $tpCheck, $tpPrev, $tpSilos, $tpLogs))
 
 # ---- Panneau bas : actions + journal
 $pnlBottom = New-Object System.Windows.Forms.Panel
@@ -677,7 +731,15 @@ $bTog.Add_Click({
             [void][System.Windows.Forms.MessageBox]::Show("Impossible de passer en Enforce : $($bad.Count) compte(s) sont assignes SANS droit d'acces (ils seraient bloques).`r`nUtilisez 'Reparer les incoherences' d'abord.", "Blocage evite", 'OK', 'Warning')
             return
         }
-        if ([System.Windows.Forms.MessageBox]::Show("Passer le silo '$($s.Name)' en mode ENFORCE ?", "Confirmation", 'YesNo', 'Warning') -ne 'Yes') { return }
+        $v = $script:lastLogVerdict
+        $extra = if (-not $v -or $v.Silo -ne $s.Name) {
+            "`r`n`r`nAUCUNE analyse des journaux des DC n'a ete faite pour ce silo dans cette session (onglet 8). Recommande avant de basculer."
+        } elseif ($v.AuditFail -gt 0) {
+            "`r`n`r`nATTENTION : la derniere analyse des journaux ($($v.Time), $($v.Hours) h) contient $($v.AuditFail) evenement(s) d'audit (authentifications qui seraient REFUSEES) pour : $($v.Accounts)"
+        } else {
+            "`r`n`r`nDerniere analyse des journaux ($($v.Time), $($v.Hours) h, $($v.DcOk) DC lus) : aucun echec d'audit."
+        }
+        if ([System.Windows.Forms.MessageBox]::Show("Passer le silo '$($s.Name)' en mode ENFORCE ?$extra", "Confirmation", 'YesNo', 'Warning') -ne 'Yes') { return }
     }
     try {
         Set-ADAuthenticationPolicySilo -Identity $s.DistinguishedName -Enforce $new -ErrorAction Stop
@@ -723,11 +785,309 @@ $bDel.Add_Click({
     Refresh-Silos
 })
 
+# ---------------------------------------------------------------- Journaux des DC
+$script:EvtLogFail = 'Microsoft-Windows-Authentication/AuthenticationPolicyFailures-DomainController'
+$script:EvtLogSucc = 'Microsoft-Windows-Authentication/ProtectedUserSuccesses-DomainController'
+# Type : AUDIT = serait refuse en Enforce ; ENFORCE = refuse ; SUCCES = TGT emis sous politique
+$script:EvtInfo = @{
+    101 = @('ENFORCE', "Echec NTLM : compte soumis a une politique/silo, NTLM refuse")
+    102 = @('AUDIT',   "NTLM : cette authentification echouerait en Enforce")
+    105 = @('ENFORCE', "TGT Kerberos refuse : restriction de controle d'acces (connexion depuis un appareil non autorise)")
+    106 = @('ENFORCE', "Ticket de service Kerberos refuse : restriction de controle d'acces")
+    305 = @('AUDIT',   "TGT Kerberos : serait refuse en Enforce (appareil hors silo / condition non remplie)")
+    306 = @('AUDIT',   "Ticket de service Kerberos : serait refuse en Enforce")
+    303 = @('SUCCES',  "TGT Kerberos emis avec application de la politique / du silo")
+}
+$script:logRows = New-Object System.Collections.Generic.List[object]
+$script:logSilos = @{}
+$script:lastLogVerdict = $null
+
+function Get-EvtData($e) {
+    $h = [ordered]@{}
+    try {
+        $x = [xml]$e.ToXml()
+        foreach ($d in @($x.Event.EventData.Data)) {
+            if ($d -and $d.Name) { $h[[string]$d.Name] = [string]$d.InnerText }
+        }
+    } catch { }
+    $h
+}
+
+function Pick($h, [string[]]$names) {
+    foreach ($n in $names) { foreach ($k in $h.Keys) { if ($k -ieq $n -and $h[$k] -and $h[$k] -ne '-') { return [string]$h[$k] } } }
+    ''
+}
+
+function Get-ShortName([string]$n) {
+    if (-not $n) { return '' }
+    $n = ($n -split '\\')[-1]; $n = ($n -split '@')[0]
+    $n.Trim()
+}
+
+function Get-SelectedDCs { @($clbDC.CheckedItems | ForEach-Object { [string]$_ }) }
+
+function Load-LogTargets {
+    $cbLSilo.Items.Clear(); $script:logSilos = @{}
+    try {
+        foreach ($s in @(Get-ADAuthenticationPolicySilo -Filter * -Properties *)) {
+            $script:logSilos[$s.Name] = $s; [void]$cbLSilo.Items.Add($s.Name)
+        }
+        $cur = $txtSilo.Text.Trim()
+        if ($cur -and $cbLSilo.Items.Contains($cur)) { $cbLSilo.SelectedItem = $cur }
+        elseif ($cbLSilo.Items.Count -gt 0) { $cbLSilo.SelectedIndex = 0 }
+    } catch { Log ("ERREUR lecture des silos : " + $_.Exception.Message) }
+    $clbDC.Items.Clear()
+    try {
+        foreach ($dc in @(Get-ADDomainController -Filter * | Sort-Object HostName)) { [void]$clbDC.Items.Add([string]$dc.HostName, $true) }
+        Log ("{0} silo(s) et {1} controleur(s) de domaine charges." -f $cbLSilo.Items.Count, $clbDC.Items.Count)
+    } catch { Log ("ERREUR liste des DC : " + $_.Exception.Message) }
+}
+
+# Recherche dans SYSVOL des GPO (preferences de Registre) qui configurent ces journaux
+function Find-LogGpo {
+    $res = @()
+    try {
+        $dom  = Get-ADDomain
+        $root = "\\$($dom.DNSRoot)\SYSVOL\$($dom.DNSRoot)\Policies"
+        $links = ''
+        foreach ($dn in @("OU=Domain Controllers,$($dom.DistinguishedName)", $dom.DistinguishedName)) {
+            try { $links += [string](Get-ADObject -Identity $dn -Properties gPLink -ErrorAction Stop).gPLink } catch { }
+        }
+        foreach ($f in @(Get-ChildItem -Path $root -Directory -ErrorAction Stop)) {
+            $x = Join-Path $f.FullName 'Machine\Preferences\Registry\Registry.xml'
+            if (-not (Test-Path -LiteralPath $x)) { continue }
+            $txt = [System.IO.File]::ReadAllText($x)
+            foreach ($ln in @($script:EvtLogFail, $script:EvtLogSucc)) {
+                $leaf = ($ln -split '/')[-1]
+                if ($txt -notmatch [regex]::Escape($leaf)) { continue }
+                $name = $f.Name
+                try {
+                    $g = Get-ADObject -LDAPFilter "(&(objectClass=groupPolicyContainer)(cn=$(Escape-Ldap $f.Name)))" -Properties displayName -ErrorAction Stop
+                    if ($g.displayName) { $name = $g.displayName }
+                } catch { }
+                $res += [pscustomobject]@{
+                    Log = $ln; Gpo = $name; Guid = $f.Name
+                    Linked = ($links -match [regex]::Escape($f.Name))
+                    SetsSize = ($txt -match '(?s)' + [regex]::Escape($leaf) + '.{0,400}MaxSize')
+                }
+            }
+        }
+    } catch { Log ("Recherche des GPO dans SYSVOL impossible : " + $_.Exception.Message) }
+    $res
+}
+
+function Get-ChannelReg([string]$dc, [string]$ln) {
+    try {
+        $b = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $dc)
+        $k = $b.OpenSubKey("SOFTWARE\Microsoft\Windows\CurrentVersion\WINEVT\Channels\$ln")
+        if (-not $k) { $b.Close(); return 'cle de registre absente' }
+        $e = $k.GetValue('Enabled'); $m = $k.GetValue('MaxSize')
+        $k.Close(); $b.Close()
+        "Registre : Enabled={0}, MaxSize={1}" -f $(if ($null -eq $e) { 'n/d' } else { $e }), $(if ($null -eq $m) { 'n/d' } else { "$([math]::Round($m / 1MB, 1)) Mo" })
+    } catch { "Registre distant illisible (service RemoteRegistry ?) : " + $_.Exception.Message }
+}
+
+# Mode : State (consultation), Enable, Disable
+function Show-LogState([string]$Mode = 'State') {
+    $dcs = Get-SelectedDCs
+    if ($dcs.Count -eq 0) { Log "Aucun DC selectionne."; return }
+    $gpos = @(Find-LogGpo)
+    foreach ($ln in @($script:EvtLogFail, $script:EvtLogSucc)) {
+        $short = ($ln -split '/')[-1]
+        $gl = @($gpos | Where-Object { $_.Log -eq $ln })
+        if ($gl.Count -eq 0) { Log ("GPO : aucune preference de Registre ne configure {0} (SYSVOL)." -f $short) }
+        foreach ($g in $gl) {
+            Log ("GPO : '{0}' configure {1} - {2}{3}" -f $g.Gpo, $short,
+                $(if ($g.Linked) { "liee a l'OU Domain Controllers ou a la racine du domaine" } else { "NON liee a l'OU Domain Controllers / racine (verifier ses liens)" }),
+                $(if ($g.SetsSize) { ", fixe aussi la taille" } else { '' }))
+        }
+    }
+    foreach ($dc in $dcs) {
+        foreach ($ln in @($script:EvtLogFail, $script:EvtLogSucc)) {
+            $short = ($ln -split '/')[-1]
+            $gl = @($gpos | Where-Object { $_.Log -eq $ln })
+            try {
+                $sess = New-Object System.Diagnostics.Eventing.Reader.EventLogSession($dc)
+                $cfg  = New-Object System.Diagnostics.Eventing.Reader.EventLogConfiguration($ln, $sess)
+                switch ($Mode) {
+                    'Enable' {
+                        $chg = $false
+                        if (-not $cfg.IsEnabled) { $cfg.IsEnabled = $true; $chg = $true }
+                        if ($cfg.MaximumSizeInBytes -lt 20MB) {
+                            if (@($gl | Where-Object SetsSize).Count -gt 0) { Log ("{0} : {1} taille fixee par GPO ({2} Mo), non modifiee." -f $dc, $short, [math]::Round($cfg.MaximumSizeInBytes / 1MB, 1)) }
+                            else { $cfg.MaximumSizeInBytes = 20MB; $chg = $true }
+                        }
+                        if ($chg) { $cfg.SaveChanges(); Log ("{0} : {1} active." -f $dc, $short) } else { Log ("{0} : {1} deja actif." -f $dc, $short) }
+                    }
+                    'Disable' {
+                        if ($cfg.IsEnabled) { $cfg.IsEnabled = $false; $cfg.SaveChanges(); Log ("{0} : {1} desactive." -f $dc, $short) }
+                        else { Log ("{0} : {1} deja desactive." -f $dc, $short) }
+                        if ($gl.Count -gt 0) { Log ("  ATTENTION : une GPO configure ce journal, il sera probablement reactive au prochain rafraichissement des strategies.") }
+                    }
+                    default {
+                        $n = ''
+                        try { $n = (Get-WinEvent -ListLog $ln -ComputerName $dc -ErrorAction Stop).RecordCount } catch { }
+                        Log ("{0} : {1} -> {2}, {3} Mo max, {4} evenement(s). {5}" -f $dc, $short, $(if ($cfg.IsEnabled) { 'ACTIF' } else { 'DESACTIVE' }), [math]::Round($cfg.MaximumSizeInBytes / 1MB, 1), $n, (Get-ChannelReg $dc $ln))
+                        if ($gl.Count -gt 0 -and -not $cfg.IsEnabled) { Log "  Une GPO configure ce journal mais il est desactive : GPO non appliquee sur ce DC (liens, filtrage, gpupdate) ?" }
+                    }
+                }
+                $cfg.Dispose(); $sess.Dispose()
+            } catch { Log ("ECHEC {0} / {1} : {2}" -f $dc, $short, $_.Exception.Message) }
+        }
+    }
+}
+
+function Invoke-LogAnalysis {
+    $lvL.Items.Clear(); $txtLDet.Clear(); $script:logRows.Clear()
+    $siloName = [string]$cbLSilo.SelectedItem
+    $noFilter = $chkLAll.Checked
+    if (-not $siloName -and -not $noFilter) { Log "Selectionnez un silo (ou cochez 'Sans filtre silo')."; return }
+    $dcs = Get-SelectedDCs
+    if ($dcs.Count -eq 0) { Log "Aucun DC selectionne."; return }
+
+    # Comptes du silo (acces accorde ou assignes) -> noms SAM pour le filtrage
+    $members = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+    $siloPol = ''
+    if ($siloName -and $script:logSilos.ContainsKey($siloName)) {
+        $s = $script:logSilos[$siloName]; $siloPol = [string]$s.UserAuthenticationPolicy
+        foreach ($a in @(Get-SiloState $s)) {
+            try {
+                $o = Get-ADObject -Identity $a.Dn -Properties sAMAccountName -ErrorAction Stop
+                if ($o.sAMAccountName) { [void]$members.Add($o.sAMAccountName); [void]$members.Add($o.sAMAccountName.TrimEnd('$')) }
+            } catch { }
+        }
+        Log ("Analyse du silo '{0}' : {1} compte(s) membre(s) pris en compte." -f $siloName, [int]($members.Count / 2))
+    }
+    $polName = if ($siloPol) { ($siloPol -split ',')[0] -replace '^CN=', '' } else { '' }
+
+    $start = (Get-Date).AddHours(-[int]$numLH.Value)
+    $logs = @($script:EvtLogFail); if ($chkLSucc.Checked) { $logs += $script:EvtLogSucc }
+    $dcOk = 0
+    $form.Cursor = 'WaitCursor'
+    try {
+        foreach ($dc in $dcs) {
+            $readOk = $false
+            foreach ($ln in $logs) {
+                $short = ($ln -split '/')[-1]
+                Log ("Lecture {0} sur {1}..." -f $short, $dc)
+                $evts = @()
+                try {
+                    $evts = @(Get-WinEvent -ComputerName $dc -FilterHashtable @{ LogName = $ln; StartTime = $start } -MaxEvents ([int]$numLMax.Value) -ErrorAction Stop)
+                    $readOk = $true
+                } catch {
+                    if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*' -or $_.Exception.Message -match 'No events were found|Aucun') { $readOk = $true }
+                    else { Log ("  ECHEC : " + $_.Exception.Message + " (journal desactive ? pare-feu ? droits ?)") }
+                }
+                $kept = 0
+                foreach ($e in $evts) {
+                    $h = Get-EvtData $e
+                    $acct = Pick $h @('AccountName', 'TargetUserName', 'UserName', 'ClientName')
+                    $dom  = Pick $h @('AccountDomain', 'TargetDomainName', 'DomainName')
+                    $dev  = Pick $h @('DeviceName', 'WorkstationName', 'Workstation', 'ClientAddress', 'IpAddress', 'ServiceName')
+                    $svc  = Pick $h @('ServiceName', 'TargetServiceName')
+                    $esil = Pick $h @('SiloName', 'AuthenticationPolicySilo', 'PolicySilo', 'Silo')
+                    $epol = Pick $h @('PolicyName', 'AuthenticationPolicy', 'Policy')
+                    $msg  = ''; try { $msg = [string]$e.Message } catch { }
+
+                    if (-not $noFilter) {
+                        $match = $false
+                        if ($esil -and $esil -ieq $siloName) { $match = $true }
+                        elseif ($polName -and $epol -and $epol -ieq $polName) { $match = $true }
+                        elseif ($acct -and $members.Contains((Get-ShortName $acct))) { $match = $true }
+                        elseif ($siloName -and $msg -and $msg -match ('(?i)(^|[\s"''=:])' + [regex]::Escape($siloName) + '($|[\s"'',.;])')) { $match = $true }
+                        if (-not $match) { continue }
+                    }
+                    $info = $script:EvtInfo[[int]$e.Id]
+                    $type = if ($info) { $info[0] } else { 'AUTRE' }
+                    $sig  = if ($info) { $info[1] } else { "Evenement non catalogue : voir le detail" }
+                    $row = [pscustomobject]@{
+                        DC = $dc; Date = $e.TimeCreated; Id = [int]$e.Id; Type = $type
+                        Compte = $(if ($dom -and $acct -and $acct -notmatch '\\|@') { "$dom\$acct" } else { $acct })
+                        Appareil = $(if ($svc -and $dev -ne $svc) { ($dev, $svc | Where-Object { $_ }) -join ' / ' } else { $dev })
+                        SiloPolitique = (@($esil, $epol) | Where-Object { $_ }) -join ' / '
+                        Signification = $sig; Journal = $short
+                        Details = (($h.Keys | ForEach-Object { "{0,-28}: {1}" -f $_, $h[$_] }) -join "`r`n")
+                        Message = $msg
+                    }
+                    $script:logRows.Add($row); $kept++
+                }
+                Log ("  {0} evenement(s) lus, {1} retenu(s)." -f $evts.Count, $kept)
+            }
+            if ($readOk) { $dcOk++ }
+        }
+    } finally { $form.Cursor = 'Default' }
+
+    foreach ($r in @($script:logRows | Sort-Object Date -Descending)) {
+        $it = New-Object System.Windows.Forms.ListViewItem([string]$r.DC)
+        foreach ($v in @($r.Date.ToString('yyyy-MM-dd HH:mm:ss'), [string]$r.Id, $r.Type, $r.Compte, $r.Appareil, $r.SiloPolitique, $r.Signification)) { [void]$it.SubItems.Add([string]$v) }
+        switch ($r.Type) {
+            'ENFORCE' { $it.ForeColor = [System.Drawing.Color]::Firebrick }
+            'AUDIT'   { $it.ForeColor = [System.Drawing.Color]::DarkOrange }
+            'SUCCES'  { $it.ForeColor = [System.Drawing.Color]::ForestGreen }
+            default   { $it.ForeColor = [System.Drawing.Color]::DimGray }
+        }
+        $it.Tag = $r
+        [void]$lvL.Items.Add($it)
+    }
+
+    # Synthese / verdict
+    $aud = @($script:logRows | Where-Object Type -eq 'AUDIT')
+    $enf = @($script:logRows | Where-Object Type -eq 'ENFORCE')
+    $suc = @($script:logRows | Where-Object Type -eq 'SUCCES')
+    $accts = @($aud + $enf | ForEach-Object { if ($_.Appareil) { "$($_.Compte) depuis $($_.Appareil)" } else { $_.Compte } } | Where-Object { $_ } | Sort-Object -Unique)
+    $acctTxt = if ($accts.Count -gt 6) { (($accts | Select-Object -First 6) -join ', ') + " (+$($accts.Count - 6))" } else { $accts -join ', ' }
+    $verdict = if ($dcOk -lt $dcs.Count) {
+        "INCOMPLET : $($dcs.Count - $dcOk) DC illisible(s), analyse non concluante."
+    } elseif ($aud.Count + $enf.Count -gt 0) {
+        "NON PRET pour Enforce : ajoutez au silo les appareils manquants ou corrigez les comptes ($acctTxt)."
+    } elseif ($chkLSucc.Checked -and $suc.Count -eq 0 -and -not $noFilter) {
+        "A CONFIRMER : aucun echec, mais aucun TGT emis sous la politique n'a ete vu (comptes non utilises sur la periode, ou silo non applique ?)."
+    } else {
+        "Aucun echec d'audit sur la periode : bascule en Enforce envisageable (apres test avec un compte pilote, break-glass hors silo)."
+    }
+    $lblLSum.Text = ("{0} DC lu(s) / {1} - {2} h - AUDIT (seraient refuses) : {3} - ENFORCE (refuses) : {4} - SUCCES : {5}`r`n{6}" -f $dcOk, $dcs.Count, [int]$numLH.Value, $aud.Count, $enf.Count, $suc.Count, $verdict)
+    $lblLSum.ForeColor = if ($aud.Count + $enf.Count -gt 0 -or $dcOk -lt $dcs.Count) { [System.Drawing.Color]::Firebrick } else { [System.Drawing.Color]::ForestGreen }
+    Log ("Analyse des journaux : " + $verdict)
+    if ($siloName -and -not $noFilter) {
+        $script:lastLogVerdict = [pscustomobject]@{
+            Silo = $siloName; Time = (Get-Date -Format 'yyyy-MM-dd HH:mm'); Hours = [int]$numLH.Value
+            AuditFail = ($aud.Count + $enf.Count + $(if ($dcOk -lt $dcs.Count) { 1 } else { 0 })); Accounts = $(if ($acctTxt) { $acctTxt } else { "lecture incomplete des DC" }); DcOk = $dcOk
+        }
+    }
+}
+
+$bLLoad.Add_Click({ Load-LogTargets })
+$bLState.Add_Click({ Show-LogState })
+$bLEnable.Add_Click({
+    if ([System.Windows.Forms.MessageBox]::Show("Activer les journaux AuthenticationPolicyFailures-DomainController et ProtectedUserSuccesses-DomainController (20 Mo max, sauf taille fixee par GPO) sur les DC selectionnes ?", "Activation des journaux", 'YesNo', 'Question') -eq 'Yes') { Show-LogState 'Enable' }
+})
+$bLDisable.Add_Click({
+    if ([System.Windows.Forms.MessageBox]::Show("DESACTIVER les journaux AuthenticationPolicyFailures-DomainController et ProtectedUserSuccesses-DomainController sur les DC selectionnes ?`r`n`r`nA reserver aux environnements de test : plus aucun evenement d'audit du silo ne sera enregistre. Les evenements deja presents sont conserves.", "Desactivation des journaux", 'YesNo', 'Warning') -eq 'Yes') { Show-LogState 'Disable' }
+})
+$bLRun.Add_Click({ Invoke-LogAnalysis })
+$lvL.Add_SelectedIndexChanged({
+    if ($lvL.SelectedItems.Count -eq 0) { $txtLDet.Clear(); return }
+    $r = $lvL.SelectedItems[0].Tag
+    $txtLDet.Text = ("{0} | {1} | ID {2} | {3}`r`n{4}`r`n`r`n--- EventData ---`r`n{5}`r`n`r`n--- Message ---`r`n{6}" -f $r.DC, $r.Date, $r.Id, $r.Journal, $r.Signification, $r.Details, ($r.Message -replace "(?<!`r)`n", "`r`n"))
+})
+$bLCsv.Add_Click({
+    if ($script:logRows.Count -eq 0) { Log "Rien a exporter."; return }
+    $sfd = New-Object System.Windows.Forms.SaveFileDialog
+    $sfd.Filter = 'CSV (*.csv)|*.csv'
+    $sfd.FileName = ("AuditSilo-{0}-{1}.csv" -f $cbLSilo.SelectedItem, (Get-Date -Format 'yyyyMMdd-HHmm'))
+    if ($sfd.ShowDialog() -eq 'OK') {
+        $script:logRows | Select-Object DC, Date, Id, Type, Compte, Appareil, SiloPolitique, Signification, Journal, Message |
+            Export-Csv -Path $sfd.FileName -Delimiter ';' -NoTypeInformation -Encoding UTF8
+        Log ("Export CSV : " + $sfd.FileName)
+    }
+})
+
 # ---------------------------------------------------------------- Evenements globaux
 $script:silosLoaded = $false
 $tabs.Add_SelectedIndexChanged({
     if ($tabs.SelectedTab -eq $tpPrev) { Update-Preview }
     if ($tabs.SelectedTab -eq $tpSilos -and -not $script:silosLoaded) { $script:silosLoaded = $true; Refresh-Silos }
+    if ($tabs.SelectedTab -eq $tpLogs -and $clbDC.Items.Count -eq 0) { Load-LogTargets }
 })
 $btnPrevRef.Add_Click({ Update-Preview })
 $btnPrevSave.Add_Click({
