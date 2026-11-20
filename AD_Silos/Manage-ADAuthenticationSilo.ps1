@@ -6,7 +6,7 @@
 .DESCRIPTION
     *** OUTIL A INTERFACE GRAPHIQUE (Windows Forms) ***
     Ce script ne prend AUCUN parametre : il s'utilise exclusivement via sa fenetre.
-    Lancez-le (clic droit > Executer avec PowerShell, ou  .\Manage-ADAuthSilo.ps1  depuis une
+    Lancez-le (clic droit > Executer avec PowerShell, ou  .\Manage-ADAuthSilo-v2.1.ps1  depuis une
     console PowerShell) puis renseignez les onglets. Il ne s'execute pas en mode
     non interactif (tache planifiee, session sans bureau, Server Core sans session graphique).
 
@@ -112,16 +112,33 @@
         le compte qui execute l'outil.
 
 .NOTES
+    Version       : 2.1
+    Auteur        : EZES Jean-Michel
+    Credits       : Conception, specifications fonctionnelles, expertise Active Directory et
+                    validation : EZES Jean-Michel.
+                    Developpement realise avec l'assistance de l'IA Claude (Anthropic) :
+                    redaction et evolution du code (onglet "Journaux DC", detection GPO /
+                    registre, activation / desactivation des journaux).
+    Usage         : Libre d'utilisation et de modification a condition de conserver ces
+                    credits. Fourni "en l'etat", sans garantie : testez-le d'abord sur un
+                    environnement de recette avant toute utilisation en production.
+    Date          : 2026-11-20
+    Historique    : 2.1 - Detection GPO / registre des journaux, bouton de desactivation,
+                          credits et numero de version.
+                    2.0 - Onglet "Journaux DC" (analyse des evenements d'audit du silo avant
+                          passage en Enforce), rappel du verdict lors de la bascule.
+
     Commencez TOUJOURS en mode Audit, analysez les evenements d'audit sur les controleurs de
     domaine, testez avec un compte pilote, puis seulement passez en Enforce.
     Fichier encode en UTF-8 avec BOM (necessaire a PowerShell 5.1 pour les accents).
 
 .EXAMPLE
-    .\Manage-ADAuthSilo.ps1
+    .\Manage-ADAuthSilo-v2.1.ps1
     Ouvre la fenetre de gestion des silos (aucun parametre).
 #>
 
 Set-StrictMode -Off
+$script:Version = '2.1'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 [System.Windows.Forms.Application]::EnableVisualStyles()
@@ -283,7 +300,7 @@ function Get-Accts($lv) { @($lv.Items | ForEach-Object { $_.Tag }) }
 
 # ---------------------------------------------------------------- Fenetre principale
 $form = New-Object System.Windows.Forms.Form
-$form.Text = "Gestionnaire de silos d'authentification Active Directory"
+$form.Text = "Gestionnaire de silos d'authentification Active Directory - v$($script:Version)"
 $form.Size = (Z 1100 800); $form.StartPosition = 'CenterScreen'
 $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
 
@@ -638,7 +655,7 @@ function Get-Plan {
 }
 
 function Update-Preview {
-    $lines = @("# Genere par Manage-ADAuthSilo.ps1 le $(Get-Date -Format 'yyyy-MM-dd HH:mm')", 'Import-Module ActiveDirectory', '$ErrorActionPreference = ''Stop''', '')
+    $lines = @("# Genere par Manage-ADAuthSilo v$($script:Version) le $(Get-Date -Format 'yyyy-MM-dd HH:mm')", 'Import-Module ActiveDirectory', '$ErrorActionPreference = ''Stop''', '')
     $lines += @(Get-Plan | ForEach-Object { $_.Text })
     $txtPrev.Text = ($lines -join "`r`n")
 }
