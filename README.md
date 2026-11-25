@@ -14,7 +14,7 @@ Scripts dédiés à la gestion, l'audit et le nettoyage de l'annuaire.
 
 | Script | Utilité | Impact |
 | :--- | :--- | :--- |
-| [`Get-ADInactiveUsers.ps1`](./ActiveDirectory/Get-ADInactiveUsers.ps1) *(Exemple)* | Liste les comptes inactifs depuis $X$ jours et sort un export CSV. | 🟢 Lecture seule |
+| [`Manage-ADAuthenticationSilo.ps1`](./AD_Silos/Manage-ADAuthenticationSilo.ps1) *(Exemple)* | Liste les comptes inactifs depuis $X$ jours et sort un export CSV. | 🟢 Lecture seule |
 | [`New-ADBulkUsers.ps1`](./ActiveDirectory/New-ADBulkUsers.ps1) *(Exemple)* | Création d'utilisateurs en masse depuis un fichier CSV. | 🟡 Modification |
 | *À venir...* | *Emplacement pour le prochain script AD* | ⚪ - |
 
