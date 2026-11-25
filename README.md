@@ -16,6 +16,7 @@ Scripts dédiés à la gestion, l'audit et le nettoyage de l'annuaire.
 | :--- | :--- | :--- |
 | [`Manage-ADAuthenticationSilo.ps1`](./AD_Silos/Manage-ADAuthenticationSilo.ps1) *(Exemple)* |  Gestionnaire GRAPHIQUE de silos d'authentification Active Directory. | 🟢 Opérationnel |
 | [`TierModel_Deployment_v1.1.ps1`](./Tiering_Model/TierModel_Deployment_v1.1.ps1) *(Exemple)* | Assistant graphique de mise en place d'un Tier Model dans Active Directory. | 🟡 En cours de développement |
+| [`New-GmsaGui.ps1`](./Active_Directory/gMSA/New-GmsaGui.ps1) | Assistant GRAPHIQUE de création d'un gMSA et du groupe de serveurs autorisés à récupérer son mot de passe (OU, Tier, chiffrement, groupes, délégations). Dry Run, Rollback JSON, logs. | 🟡 Non testé sur AD réel |
 | *À venir...* | *Emplacement pour le prochain script AD* | ⚪ - |
 
 *(D'autres dossiers suivront au fil des besoins : Entra ID, Exchange, Windows Server, etc.)*
