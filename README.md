@@ -14,8 +14,8 @@ Scripts dédiés à la gestion, l'audit et le nettoyage de l'annuaire.
 
 | Script | Utilité | Impact |
 | :--- | :--- | :--- |
-| [`Manage-ADAuthenticationSilo.ps1`](./AD_Silos/Manage-ADAuthenticationSilo.ps1) *(Exemple)* | Liste les comptes inactifs depuis $X$ jours et sort un export CSV. | 🟢 Lecture seule |
-| [`New-ADBulkUsers.ps1`](./ActiveDirectory/New-ADBulkUsers.ps1) *(Exemple)* | Création d'utilisateurs en masse depuis un fichier CSV. | 🟡 Modification |
+| [`Manage-ADAuthenticationSilo.ps1`](./AD_Silos/Manage-ADAuthenticationSilo.ps1) *(Exemple)* |  Gestionnaire GRAPHIQUE de silos d'authentification Active Directory. | 🟢 Opérationnel |
+| [`TierModel_Deployment_v1.1.ps1`](./Tiering_Model/TierModel_Deployment_v1.1.ps1) *(Exemple)* | Assistant graphique de mise en place d'un Tier Model dans Active Directory. | 🟡 En cours de développement |
 | *À venir...* | *Emplacement pour le prochain script AD* | ⚪ - |
 
 *(D'autres dossiers suivront au fil des besoins : Entra ID, Exchange, Windows Server, etc.)*
