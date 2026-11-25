@@ -2,8 +2,8 @@
 
 Ce dépôt me sert de boîte à outils personnelle pour centraliser mes scripts d'automatisation, d'audit et d'administration système. L'objectif est simple : éviter les tâches répétitives à la souris et garder sous la main des bouts de code propres, testés et réutilisables.
 
-![Bannière PowerShell Active Directory](./banner.png)
-*(Astuce : tu peux enregistrer l'image générée juste au-dessus à la racine de ton dépôt sous le nom `banner.png` pour l'afficher ici !)*
+![Bannière PowerShell Active Directory](./assets/banner.png)
+
 
 ---
 
